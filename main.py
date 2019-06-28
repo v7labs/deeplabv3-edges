@@ -14,10 +14,24 @@ from open_images import OpenImagesDataset
 from models.deeplabv3 import DeepLabHead
 from models.fcn import FCNHead
 
-def load_model(pretrained=False):
-    model = torchvision.models.segmentation.deeplabv3_resnet101(pretrained=pretrained)        
+def load_model(n_classes=1, pretrained=False, aux_loss=False):
+
+    # model = torchvision.models.segmentation.deeplabv3_resnet101(pretrained=pretrained, aux_loss=aux_loss)
+    model = torchvision.models.segmentation.deeplabv3_resnet50(pretrained=False, aux_loss=False)  
+   
+    # modify last model layers
+    inplanes = 2048
+    classifier =     
+    model.classifier = DeepLabHead(inplanes, n_classes)
+
+    if aux_loss:
+        inplanes = 1024
+        model.aux_classifier = FCNHead(inplanes, n_classes)
+    else:
+        model.aux_classifier = None
+
     np_model = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f'DeppLabv3 -- num. of learnable parameters: {np_model}') 
+    print(f'DeepLabv3 -- num. of learnable parameters: {np_model}') 
 
     return model
 
@@ -27,9 +41,11 @@ def get_transform(train):
     transforms.append(T.ToTensor())
 #     if train:
 #         transforms.append(T.RandomHorizontalFlip(0.5))
-    return T.Compose(transforms)
+    return transforms
 
 if __name__== "__main__":
+    
+    torch.cuda.empty_cache()
 
     dbroot = '/datasets/OpenImages/processedv4'
     dataset_train = SegDataset(os.path.join(dbroot, 'test'), get_transform(train=True))
@@ -37,29 +53,21 @@ if __name__== "__main__":
 
     # define training and validation data loaders
     data_loader_train = torch.utils.data.DataLoader(
-        dataset_train, batch_size=2, shuffle=True, num_workers=4,)
-        # collate_fn=utils.collate_fn)
+        dataset_train, drop_last=True, batch_size=48, shuffle=True, num_workers=12)
+#         collate_fn=utils.collate_fn)
 
     data_loader_val = torch.utils.data.DataLoader(
-        dataset_val, batch_size=1, shuffle=False, num_workers=4,)
-        # collate_fn=utils.collate_fn)
+        dataset_val, drop_last=True, batch_size=48, shuffle=False, num_workers=12)
+#         collate_fn=utils.collate_fn)
+
+    print(f"Train set size: {len(data_loader_train.dataset)}, n_batches: {len(data_loader_train)}")
+    print(f"Validation set size: {len(data_loader_val.dataset)}, n_batches: {len(data_loader_val)}")
 
     # model
-    model = load_model(pretrained=True)
-    num_classes = 1
-    aux=True
-    if aux:
-        inplanes = 1024
-        aux_classifier = FCNHead(inplanes, num_classes)
-
-    inplanes = 2048
-    classifier = DeepLabHead(inplanes, num_classes)
-    
-    model.classifier = classifier
-    model.aux_classifier = aux_classifier
+    model = load_model(pretrained=True, aux_loss=False)
 
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    model.to(device)
+    model = torch.nn.DataParallel(model).to(device)
 
     # construct an optimizer
     params = [p for p in model.parameters() if p.requires_grad]
@@ -71,16 +79,16 @@ if __name__== "__main__":
                                                    gamma=0.1)
 
     # let's train it for 10 epochs
-    num_epochs = 30
-
+    num_epochs = 100
+    
     for epoch in range(num_epochs):
         # train for one epoch, printing every 10 iterations
         engine.train_one_epoch(model, optimizer, data_loader_train, device, epoch, print_freq=10)
         # update the learning rate
         lr_scheduler.step()
         # evaluate on the test dataset
-        # evaluate(model, data_loader_test, device=device)
+        engine.evaluate(model, data_loader_val, device, epoch, print_freq=10)
 
 
-    # for i in range(len(dataset)):
+    # for i in range(len(dataset)):|
     #     it = dataset.__getitem__(i)

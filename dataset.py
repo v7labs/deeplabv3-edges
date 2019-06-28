@@ -3,6 +3,8 @@ import cv2
 import numpy as np
 import torch
 from PIL import Image
+import torchvision
+
 
 class SegDataset(object):
     def __init__(self, root, transforms):
@@ -10,9 +12,12 @@ class SegDataset(object):
         self.transforms = transforms
         # load all image files, sorting them to
         # ensure that they are aligned
-        self.imgs = list(sorted(os.listdir(os.path.join(root, "images"))))
-        self.masks = list(sorted(os.listdir(os.path.join(root, "masks"))))
-        self.polys = list(sorted(os.listdir(os.path.join(root, "polygons"))))
+
+        # cut_dataset_at=10000
+
+        self.imgs = list(sorted(os.listdir(os.path.join(root, "images"))))#[:cut_dataset_at]
+        self.masks = list(sorted(os.listdir(os.path.join(root, "masks"))))#[:cut_dataset_at]
+        self.polys = list(sorted(os.listdir(os.path.join(root, "polygons"))))#[:cut_dataset_at]
 
     def __getitem__(self, idx):
         # load images ad masks
@@ -50,16 +55,22 @@ class SegDataset(object):
 
         mask =  np.zeros((img.shape[0], img.shape[1]))
         cv2.drawContours(mask, [polys], -1, 1, 5)
-        mask = np.expand_dims(mask, axis=0)
         
-        image_id = torch.tensor([idx])
-        area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
+        model_input_size = (300, 300)
 
-        if self.transforms is not None:
-            img, mask = self.transforms(img, mask)
+        img = cv2.resize(img, model_input_size)
+        mask = cv2.resize(mask, model_input_size)
 
-        print(img.shape, mask.shape)
-            
+        img = torchvision.transforms.ToTensor()(img)
+        mask = torch.tensor(np.expand_dims(mask, axis=0), dtype=torch.float)
+
+        # if self.transforms is not None:
+        #     for transform in self.transforms:
+        #         print(transform)
+        #         img = transform(img)
+        #         mask = transform(target)
+
+
         return img, mask
 
     def __len__(self):

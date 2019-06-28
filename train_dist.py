@@ -19,7 +19,7 @@ if __name__ == "__main__":
     # options.training_script_args = [
     #     '--config-file', '%s' %maskrcnn_config_file
     #     ]
-    options.nproc_per_node = 4
+    options.nproc_per_node = 2
 
     model = Distributed(options)
     model.train()

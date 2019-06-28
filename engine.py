@@ -1,4 +1,5 @@
 import math
+import cv2
 import sys
 import time
 import torch
@@ -9,6 +10,21 @@ import torchvision.models.detection.mask_rcnn
 # from coco_eval import CocoEvaluator
 import utils
 
+def criterion(inputs, target):
+    losses = {}
+    for name, x in inputs.items():
+
+        # print('HERE', torch.nn.functional.binary_cross_entropy(torch.sigmoid(x), target))
+        # print('UNIQUE', torch.unique(x), torch.unique(target))
+        # print('target', target)
+        # print(x.shape, target.shape)
+        # losses[name] = torch.nn.functional.cross_entropy(x, target.long(), ignore_index=255)
+        losses[name] = torch.nn.functional.binary_cross_entropy(torch.sigmoid(x), target)
+
+    if len(losses) == 1:
+        return losses['out']
+
+    return losses['out'] + 0.5 * losses['aux']
 
 def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
     model.train()
@@ -23,40 +39,107 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
 
         lr_scheduler = utils.warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor)
 
-    for images, targets in metric_logger.log_every(data_loader, print_freq, header):
-        print(images, targets)
-        print(images.shape, targets.shape)
+    for batch_i, (images, targets) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
 
-        images = list(image.to(device) for image in images)
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        # images = list(image.to(device) for image in images)
+        # targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        # images = torch.tensor([i for i in images]).to(device)
+        # targets = torch.tensor([i for i in targets]).to(device)
+
+        images = images.to(device)
+        targets = targets.to(device)
 
         preds = model(images)
-        loss_fn = torch.nn.MSELoss()
-        loss_dict = loss_fn(preds, targets)
+        out = preds['out']
+        # out_aux = preds['aux']
 
-        losses = loss_dict
+        # print(torch.unique(out))
+        # print(torch.unique(out_aux))
+        # print(torch.unique(targets))
+
+        loss = criterion(preds, targets)
+
+        # print(images.shape, targets.shape)
+        # print(out.shape, out_aux.shape)
+
         # losses = sum(loss for loss in loss_dict.values())
 
         # reduce losses over all GPUs for logging purposes
-        loss_dict_reduced = utils.reduce_dict(loss_dict)
-        losses_reduced = sum(loss for loss in loss_dict_reduced.values())
+        # loss_dict_reduced = utils.reduce_dict(loss_dict)
+        # losses_reduced = sum(loss for loss in loss_dict_reduced.values())
 
-        loss_value = losses_reduced.item()
+        # loss_value = losses_reduced.item()
+
+        loss_value = loss.item()
+        # print(f"Batch {batch_i} Loss is {loss_value} ")
 
         if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-            print(loss_dict_reduced)
+            print(f"Loss is {loss_value}, stopping training")
+            # print(loss_dict_reduced)
             sys.exit(1)
 
         optimizer.zero_grad()
-        losses.backward()
+        loss.backward()
         optimizer.step()
 
         if lr_scheduler is not None:
             lr_scheduler.step()
 
-        metric_logger.update(loss=losses_reduced, **loss_dict_reduced)
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        torch.cuda.empty_cache()
+        # metric_logger.update(loss=losses_reduced, **loss_dict_reduced)
+        # metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+
+    save_sample(epoch, preds, images, targets)
+
+@torch.no_grad()
+def evaluate(model, data_loader, device, epoch, print_freq):
+    # n_threads = torch.get_num_threads()
+    # torch.set_num_threads(1)
+    model.eval()
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    header = 'Test:'
+
+    for batch_i, (images, targets) in enumerate(metric_logger.log_every(data_loader, print_freq)):
+
+        images = images.to(device)
+        targets = targets.to(device)
+
+        preds = model(images)
+        out = preds['out']
+        # out_aux = preds['aux']
+
+        loss = criterion(preds, targets)
+
+        loss_value = loss.item()
+        print(f"Epoch {epoch} Val.Loss is {loss_value} Batch {batch_i} ")
+
+        torch.cuda.empty_cache()
+
+    # if (epoch + 1) % 5 == 0:
+    # save_sample(epoch, preds, images, targets)
+
+def save_sample(epoch, preds_dict, images, targets):
+    for k, pred in preds_dict.items():
+        print(torch.unique(pred))
+        pred = torch.sigmoid(pred)
+        print(torch.unique(pred))
+        preds = pred.cpu().detach().numpy()
+        
+        for _, i in enumerate(preds):
+            img = i.squeeze()
+            cv2.imwrite(f'sample_pr_{k}_e{epoch}_p{_}.png', img * 255)
+
+    targets = targets.cpu().detach().numpy()
+    for _, i in enumerate(targets):
+        img = i.squeeze()
+        print(img.shape)
+        cv2.imwrite(f'sample_gt_e{epoch}_t{_}.png', img * 255)
+    
+    # images = images.cpu().detach().numpy()    
+    # for _, i in enumerate(images):
+    #     img = i.transpose((1,2,0))[:,:,::-1]
+    #     print(img.shape)
+    #     cv2.imwrite(f'sample_gt_e{epoch}_i{_}.png', img * 255)
 
 
 # def _get_iou_types(model):
